@@ -1,0 +1,19 @@
+# Build directories
+/Debug/
+
+# Compiled object files, dependencies, and intermediates
+*.o
+*.d
+*.cyclo
+*.su
+subdir.mk
+
+# Build output files
+*.elf
+*.list
+*.map
+objects.list
+objects.mk
+
+# Optional: User-specific launch files
+*.launch
