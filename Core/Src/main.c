@@ -34,7 +34,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define DEBUG_BUFFER_SIZE 128
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -258,13 +258,7 @@ int main(void)
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_USB_Init();
   /* USER CODE BEGIN 2 */
-  ssd1306_Init();
-  // ssd1306_Fill(Black);
-  // ssd1306_UpdateScreen();
-  ssd1306_SetCursor(5, 5);
 
-  retVal = ssd1306_WriteString(text, Font_7x10, White);
-  ssd1306_UpdateScreen();
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -1046,8 +1040,6 @@ void StartLigthtSensorTask(void *argument)
     }
     else
     {
-      retVal = ssd1306_WriteString(buffer, Font_16x15, White);
-      ssd1306_UpdateScreen();
     }
 
     osDelay(200);
