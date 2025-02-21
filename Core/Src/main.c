@@ -37,6 +37,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define DEBUG_BUFFER_SIZE 128
+#define UART_BUFFER_SIZE 64
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -75,12 +76,28 @@ const osThreadAttr_t motorTask_attributes = {
     .stack_size = 128 * 4,
     .priority = (osPriority_t)osPriorityNormal,
 };
+/* Definitions for serialReadTask */
+osThreadId_t serialReadTaskHandle;
+const osThreadAttr_t serialReadTask_attributes = {
+    .name = "serialReadTask",
+    .stack_size = 256 * 4,
+    .priority = (osPriority_t)osPriorityAboveNormal,
+};
 /* Definitions for lightQueue */
 osMessageQueueId_t lightQueueHandle;
 const osMessageQueueAttr_t lightQueue_attributes = {
     .name = "lightQueue"};
+/* Definitions for serialQueue */
+osMessageQueueId_t serialQueueHandle;
+const osMessageQueueAttr_t serialQueue_attributes = {
+    .name = "serialQueue"};
 /* USER CODE BEGIN PV */
+char rxByte;
+volatile write_index = 0;
+uint8_t word_index;
 
+char word_buffer[UART_BUFFER_SIZE];
+char uart_rx_buffer[UART_BUFFER_SIZE];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -98,8 +115,9 @@ static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USB_OTG_FS_USB_Init(void);
-void StartLigthtSensorTask(void *argument);
+void StartLightSensorTask(void *argument);
 void StartMotorTask(void *argument);
+void StartSerialReadTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -214,56 +232,25 @@ void runStepperStopNonBlocking(void)
     motorRunningFlag = false;
 }
 
-uint16_t ReadLightSensor()
-{
-    HAL_ADC_Start(&hadc1);
-    while (1)
-    {
-        if (HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY) == HAL_OK)
-        {
-            uint16_t adc_value = HAL_ADC_GetValue(&hadc1);
-            PrintLn("Continuous ADC Value: %d", adc_value);
-        }
-        osDelay(200);
-    }
-    // PrintLn("ADC: Starting conversion");
-    // uint16_t adc_value = 0;
-    // HAL_ADC_Start(&hadc1);
-    // HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-    // adc_value = HAL_ADC_GetValue(&hadc1);
-    // HAL_ADC_Stop(&hadc1);
-    // PrintLn("ADC: Conversion complete, value: %d", adc_value);
-    // return adc_value;
-}
-
-/**
- * @brief  DebugLog prints a formatted string to the USART1 console.
- * @param  format: Format string (printf-style)
- * @param  ...: Arguments to be formatted
- * @retval None
- */
-void Printf(const char *format, ...)
-{
-    char buffer[DEBUG_BUFFER_SIZE];
-    va_list args;
-
-    // Initialize the variable argument list
-    va_start(args, format);
-    // Format the string into our buffer
-    vsnprintf(buffer, DEBUG_BUFFER_SIZE, format, args);
-    // Clean up the variable argument list
-    va_end(args);
-
-    // Transmit the formatted string via USART1
-    HAL_UART_Transmit(&huart1, (uint8_t *)buffer, strlen(buffer), HAL_MAX_DELAY);
-}
-
 void InitSerialConsole(void)
 {
     // ANSI escape sequence to clear screen and move cursor to top left.
     // Note: This works only if your serial console supports ANSI codes.
     PrintLn("\033[2J\033[H");
     PrintLn("=== New Program Start ===");
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART1)
+    {
+        osStatus_t status = osMessageQueuePut(serialQueueHandle, &rxByte, 0, 0);
+        if (status != osOK)
+        {
+            PrintLn("Queue overflow");
+        }
+        HAL_UART_Receive_IT(&huart1, (uint8_t *)&rxByte, 1);
+    }
 }
 /* USER CODE END 0 */
 
@@ -312,6 +299,10 @@ int main(void)
     MX_USB_OTG_FS_USB_Init();
     /* USER CODE BEGIN 2 */
     InitSerialConsole();
+    if (HAL_UART_Receive_IT(&huart1, &rxByte, 1) != HAL_OK)
+    {
+        Error_Handler();
+    }
     if (HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED) != HAL_OK)
     {
         // Calibration Error
@@ -342,32 +333,22 @@ int main(void)
     /* creation of lightQueue */
     lightQueueHandle = osMessageQueueNew(16, sizeof(uint16_t), &lightQueue_attributes);
 
+    /* creation of serialQueue */
+    serialQueueHandle = osMessageQueueNew(16, sizeof(char), &serialQueue_attributes);
+
     /* USER CODE BEGIN RTOS_QUEUES */
     /* add queues, ... */
     /* USER CODE END RTOS_QUEUES */
 
     /* Create the thread(s) */
     /* creation of lightSensorTask */
-    lightSensorTaskHandle = osThreadNew(StartLigthtSensorTask, NULL, &lightSensorTask_attributes);
-    if (lightSensorTaskHandle == NULL)
-    {
-        PrintLn("Error: Light sensor task creation failed!");
-    }
-    else
-    {
-        PrintLn("Light sensor task created successfully");
-    }
+    lightSensorTaskHandle = osThreadNew(StartLightSensorTask, NULL, &lightSensorTask_attributes);
 
     /* creation of motorTask */
     motorTaskHandle = osThreadNew(StartMotorTask, NULL, &motorTask_attributes);
-    if (motorTaskHandle == NULL)
-    {
-        PrintLn("Error: Motor task creation failed!");
-    }
-    else
-    {
-        PrintLn("Motor task created successfully");
-    }
+
+    /* creation of serialReadTask */
+    serialReadTaskHandle = osThreadNew(StartSerialReadTask, NULL, &serialReadTask_attributes);
 
     /* USER CODE BEGIN RTOS_THREADS */
     /* add threads, ... */
@@ -1086,17 +1067,17 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE END 4 */
 
-/* USER CODE BEGIN Header_StartLigthtSensorTask */
+/* USER CODE BEGIN Header_StartLightSensorTask */
 /**
  * @brief  Function implementing the lightSensorTask thread.
  * @param  argument: Not used
  * @retval None
  */
-/* USER CODE END Header_StartLigthtSensorTask */
-void StartLigthtSensorTask(void *argument)
+/* USER CODE END Header_StartLightSensorTask */
+void StartLightSensorTask(void *argument)
 {
     /* USER CODE BEGIN 5 */
-    PrintLn("Sensor Task started");
+    // PrintLn("Sensor Task started");
     uint16_t lightPercentage;
     /* Infinite loop */
     for (;;)
@@ -1111,15 +1092,15 @@ void StartLigthtSensorTask(void *argument)
 
         HAL_ADC_Stop(&hadc1);
         // Read The ADC Conversion Result & Map It To PWM DutyCycle
-        PrintLn("Percentage %d", lightPercentage);
+        // PrintLn("Percentage %d", lightPercentage);
         osStatus_t status = osMessageQueuePut(lightQueueHandle, &lightPercentage, 0, 10);
         if (status != osOK)
         {
-            PrintLn("Sensor: Queue full, value %d not sent", lightPercentage);
+            // PrintLn("Sensor: Queue full, value %d not sent", lightPercentage);
         }
         else
         {
-            PrintLn("Sensor: Value %d sent to queue", lightPercentage);
+            // PrintLn("Sensor: Value %d sent to queue", lightPercentage);
         }
         HAL_Delay(500);
     }
@@ -1136,7 +1117,7 @@ void StartLigthtSensorTask(void *argument)
 void StartMotorTask(void *argument)
 {
     /* USER CODE BEGIN StartMotorTask */
-    PrintLn("Motor Task started");
+    // PrintLn("Motor Task started");
     uint16_t lightPercentage = 0;
     bool motorRunning = false;
 
@@ -1146,7 +1127,7 @@ void StartMotorTask(void *argument)
         osStatus_t status = osMessageQueueGet(lightQueueHandle, &lightPercentage, NULL, 10);
         if (status == osOK)
         {
-            PrintLn("Motor: Received light percentage: %d%%", lightPercentage);
+            // PrintLn("Motor: Received light percentage: %d%%", lightPercentage);
 
             if (lightPercentage > 30)
             {
@@ -1154,7 +1135,7 @@ void StartMotorTask(void *argument)
                 {
                     runStepperStartNonBlocking();
                     motorRunning = true;
-                    PrintLn("Motor: Light > 30, motor started");
+                    // PrintLn("Motor: Light > 30, motor started");
                 }
             }
             else // lightPercentage <= 50
@@ -1163,7 +1144,7 @@ void StartMotorTask(void *argument)
                 {
                     runStepperStopNonBlocking();
                     motorRunning = false;
-                    PrintLn("Motor: Light <= 50, motor stopped");
+                    // PrintLn("Motor: Light <= 50, motor stopped");
                 }
             }
         }
@@ -1189,6 +1170,47 @@ void StartMotorTask(void *argument)
         osDelay(5); // A small delay to allow other tasks to run and to pace the updates
     }
     /* USER CODE END StartMotorTask */
+}
+
+/* USER CODE BEGIN Header_StartSerialReadTask */
+/**
+ * @brief Function implementing the serialReadTask thread.
+ * @param argument: Not used
+ * @retval None
+ */
+/* USER CODE END Header_StartSerialReadTask */
+void StartSerialReadTask(void *argument)
+{
+    /* USER CODE BEGIN StartSerialReadTask */
+    PrintLn("Start serial read task");
+    char received;
+    char word_buffer[UART_BUFFER_SIZE];
+    uint8_t word_index = 0;
+    /* Infinite loop */
+    for (;;)
+    {
+        if (osMessageQueueGet(serialQueueHandle, &received, NULL, 10) == osOK)
+        {
+            PrintLn("Received: %c", received);
+            if (received == '\n' || received == ';') // Delimitador detectado
+            {
+                word_buffer[word_index] = '\0'; // Termina la palabra
+                word_index = 0;
+                PrintLn("Word buffer %s", word_buffer);
+            }
+            else
+            {
+                if (word_index < UART_BUFFER_SIZE - 1) // Evita desbordamiento
+                {
+                    word_buffer[word_index++] = received;
+                }
+            }
+        }
+        // PrintLn("%s", word_buffer);
+
+        osDelay(10);
+    }
+    /* USER CODE END StartSerialReadTask */
 }
 
 /**

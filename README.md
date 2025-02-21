@@ -69,7 +69,7 @@ Where a certain cyclic sequence of opening and closing of the shutters will be d
 ### Tasks
 
 - [x] Read light sensor
-- Read serial communication (for ["outer world" instructions](#operative-modes) )
+- Read serial communication (for ["outer world" instructions](#operative-modes))
 - [x] Run motor
 - Manage vacation mode
 
