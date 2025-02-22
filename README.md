@@ -42,6 +42,7 @@ Shutter position: 0
 
 4. While the light sensor keeps its values between one of the 3 ranges described above, the shutters won’t be changed, unless the change has been stable during the **last 5 seconds** (as to avoid oscillations in light values close to the thresholds).
 
+
 ### Holidays mode
 
 Where a certain cyclic sequence of opening and closing of the shutters will be defined (individually and different from one shutter than the other). Only 4 different levels of opening will be considered. The sequence shall be randomly chosen, each time this mode is started. This mode will also disable the automatic mode.
@@ -60,7 +61,27 @@ Where a certain cyclic sequence of opening and closing of the shutters will be d
 - OS: CMSIS (FreeRTOS interface layer for Cortex-based hardware)
 - Peripherals:
   - **Stepper Motor(s)**: 5 VDC with ULN2003 driver. Connected to GPIO out pins. Need external power supply.
+
+  ```plaintext
+  Motor 1:
+  - IN1: PA3
+  - IN2: PB4
+  - IN3: PB1
+  - IN4: PA4
+
+  Motor 2:
+  - IN1: 
+  - IN2: 
+  - IN3: 
+  - IN4: 
+  ```
+
   - **Photosensitive Sensor**: with three cables. Connected to ADC1_IN5 pin.
+
+  ```plaintext
+  OUT: PA0
+  ```
+
   - *0.96in OLED*: for demonstration purposes.
 
 ---
@@ -69,7 +90,7 @@ Where a certain cyclic sequence of opening and closing of the shutters will be d
 ### Tasks
 
 - [x] Read light sensor
-- Read serial communication (for ["outer world" instructions](#operative-modes))
+- [x] Read serial communication (for ["outer world" instructions](#operative-modes))
 - [x] Run motor
 - Manage vacation mode
 

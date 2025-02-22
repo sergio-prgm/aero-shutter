@@ -1100,7 +1100,7 @@ void StartLightSensorTask(void *argument)
         }
         else
         {
-            // PrintLn("Sensor: Value %d sent to queue", lightPercentage);
+            PrintLn("Sensor: Value %d sent to queue", lightPercentage);
         }
         HAL_Delay(500);
     }
