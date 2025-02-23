@@ -55,7 +55,6 @@ I2C_HandleTypeDef hi2c2;
 
 OSPI_HandleTypeDef hospi1;
 
-SPI_HandleTypeDef hspi1;
 SPI_HandleTypeDef hspi3;
 
 UART_HandleTypeDef huart1;
@@ -109,7 +108,6 @@ static void MX_DFSDM1_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_I2C2_Init(void);
 static void MX_OCTOSPI1_Init(void);
-static void MX_SPI1_Init(void);
 static void MX_SPI3_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
@@ -165,7 +163,7 @@ static uint32_t motorNextStepTime = 0;
 static uint8_t motorStepIndex = 0;
 static bool motorRunningFlag = false;
 
-void setStepperOutput(uint8_t step)
+void setStepper1Output(uint8_t step)
 {
     // For each bit in 'step', decide whether to set or reset the corresponding pin.
     // Bit 3 corresponds to IN1 (PA3)
@@ -178,12 +176,33 @@ void setStepperOutput(uint8_t step)
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, (step & 0x01) ? GPIO_PIN_SET : GPIO_PIN_RESET);
 }
 
-void disableStepper(void)
+void setStepper2Output(uint8_t step)
+{
+    // For each bit in 'step', decide whether to set or reset the corresponding pin.
+    // Bit 3 corresponds to IN1 (PA3)
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, (step & 0x08) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    // Bit 2 corresponds to IN2 (PB4)
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, (step & 0x04) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    // Bit 1 corresponds to IN3 (PB1)
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, (step & 0x02) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    // Bit 0 corresponds to IN4 (PA4)
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, (step & 0x01) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+void disableStepper1(void)
 {
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);
+}
+
+void disableStepper2(void)
+{
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);
 }
 
 // Call this to initialize and start the stepper non-blockingly.
@@ -207,7 +226,8 @@ void runStepperUpdateNonBlocking(int8_t direction)
     if (currentTick >= motorNextStepTime)
     {
         // Output the current step.
-        setStepperOutput(stepSequence[motorStepIndex]);
+        setStepper1Output(stepSequence[motorStepIndex]);
+        setStepper2Output(stepSequence[motorStepIndex]);
 
         // Update step index based on direction.
         if (direction > 0)
@@ -228,7 +248,8 @@ void runStepperUpdateNonBlocking(int8_t direction)
 // Call this to stop the motor and reset the non-blocking state.
 void runStepperStopNonBlocking(void)
 {
-    disableStepper();
+    disableStepper1();
+    disableStepper2();
     motorRunningFlag = false;
 }
 
@@ -291,7 +312,6 @@ int main(void)
     MX_I2C1_Init();
     MX_I2C2_Init();
     MX_OCTOSPI1_Init();
-    MX_SPI1_Init();
     MX_SPI3_Init();
     MX_USART1_UART_Init();
     MX_USART2_UART_Init();
@@ -695,45 +715,6 @@ static void MX_OCTOSPI1_Init(void)
 }
 
 /**
- * @brief SPI1 Initialization Function
- * @param None
- * @retval None
- */
-static void MX_SPI1_Init(void)
-{
-
-    /* USER CODE BEGIN SPI1_Init 0 */
-
-    /* USER CODE END SPI1_Init 0 */
-
-    /* USER CODE BEGIN SPI1_Init 1 */
-
-    /* USER CODE END SPI1_Init 1 */
-    /* SPI1 parameter configuration*/
-    hspi1.Instance = SPI1;
-    hspi1.Init.Mode = SPI_MODE_MASTER;
-    hspi1.Init.Direction = SPI_DIRECTION_2LINES;
-    hspi1.Init.DataSize = SPI_DATASIZE_4BIT;
-    hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
-    hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
-    hspi1.Init.NSS = SPI_NSS_SOFT;
-    hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_4;
-    hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
-    hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
-    hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-    hspi1.Init.CRCPolynomial = 7;
-    hspi1.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
-    hspi1.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
-    if (HAL_SPI_Init(&hspi1) != HAL_OK)
-    {
-        Error_Handler();
-    }
-    /* USER CODE BEGIN SPI1_Init 2 */
-
-    /* USER CODE END SPI1_Init 2 */
-}
-
-/**
  * @brief SPI3 Initialization Function
  * @param None
  * @retval None
@@ -956,7 +937,7 @@ static void MX_GPIO_Init(void)
     HAL_GPIO_WritePin(GPIOE, ST25DV04K_RF_DISABLE_Pin | ISM43362_RST_Pin | ISM43362_SPI3_CSN_Pin, GPIO_PIN_RESET);
 
     /*Configure GPIO pin Output Level */
-    HAL_GPIO_WritePin(GPIOA, ARD_D10_Pin | ARD_D4_Pin | ARD_D7_Pin | SPBTLE_RF_RST_Pin | ARD_D9_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOA, ARD_D10_Pin | ARD_D4_Pin | ARD_D7_Pin | GPIO_PIN_6 | GPIO_PIN_7 | SPBTLE_RF_RST_Pin | ARD_D9_Pin, GPIO_PIN_RESET);
 
     /*Configure GPIO pin Output Level */
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1 | ARD_D8_Pin | ISM43362_BOOT0_Pin | ISM43362_WAKEUP_Pin | LED2_Pin | SPSGRF_915_SDN_Pin | ARD_D5_Pin | SPSGRF_915_SPI3_CSN_Pin, GPIO_PIN_RESET);
@@ -995,13 +976,21 @@ static void MX_GPIO_Init(void)
     GPIO_InitStruct.Alternate = GPIO_AF8_UART4;
     HAL_GPIO_Init(ARD_D0_GPIO_Port, &GPIO_InitStruct);
 
-    /*Configure GPIO pins : ARD_D10_Pin ARD_D4_Pin ARD_D7_Pin SPBTLE_RF_RST_Pin
-                             ARD_D9_Pin */
-    GPIO_InitStruct.Pin = ARD_D10_Pin | ARD_D4_Pin | ARD_D7_Pin | SPBTLE_RF_RST_Pin | ARD_D9_Pin;
+    /*Configure GPIO pins : ARD_D10_Pin ARD_D4_Pin ARD_D7_Pin PA6
+                             PA7 SPBTLE_RF_RST_Pin ARD_D9_Pin */
+    GPIO_InitStruct.Pin = ARD_D10_Pin | ARD_D4_Pin | ARD_D7_Pin | GPIO_PIN_6 | GPIO_PIN_7 | SPBTLE_RF_RST_Pin | ARD_D9_Pin;
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    /*Configure GPIO pin : ARD_D13_Pin */
+    GPIO_InitStruct.Pin = ARD_D13_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF5_SPI1;
+    HAL_GPIO_Init(ARD_D13_GPIO_Port, &GPIO_InitStruct);
 
     /*Configure GPIO pin : ARD_D3_Pin */
     GPIO_InitStruct.Pin = ARD_D3_Pin;

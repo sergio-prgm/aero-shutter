@@ -64,16 +64,16 @@ Where a certain cyclic sequence of opening and closing of the shutters will be d
 
   ```plaintext
   Motor 1:
-  - IN1: PA3
-  - IN2: PB4
-  - IN3: PB1
-  - IN4: PA4
+  - IN1: PA3 (D4)
+  - IN2: PB4 (D5)
+  - IN3: PB1 (D6)
+  - IN4: PA4 (D7)
 
   Motor 2:
-  - IN1: 
-  - IN2: 
-  - IN3: 
-  - IN4: 
+  - IN1: PA15 (D9)
+  - IN2: PA2 (D10)
+  - IN3: PA7 (D11)
+  - IN4: PA6 (D12)
   ```
 
   - **Photosensitive Sensor**: with three cables. Connected to ADC1_IN5 pin.
