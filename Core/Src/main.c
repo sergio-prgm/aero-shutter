@@ -38,6 +38,9 @@
 /* USER CODE BEGIN PD */
 #define DEBUG_BUFFER_SIZE 128
 #define UART_BUFFER_SIZE 64
+
+#define STEPS_PER_TURN 2048
+#define SHUTTER_TURNS 1
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -90,10 +93,20 @@ const osMessageQueueAttr_t lightQueue_attributes = {
 osMessageQueueId_t serialQueueHandle;
 const osMessageQueueAttr_t serialQueue_attributes = {
     .name = "serialQueue"};
+/* Definitions for openingPercentage1 */
+osMutexId_t openingPercentage1Handle;
+const osMutexAttr_t openingPercentage1_attributes = {
+    .name = "openingPercentage1"};
+/* Definitions for openingPercentage2 */
+osMutexId_t openingPercentage2Handle;
+const osMutexAttr_t openingPercentage2_attributes = {
+    .name = "openingPercentage2"};
 /* USER CODE BEGIN PV */
 char rxByte;
 volatile write_index = 0;
 uint8_t word_index;
+uint8_t opening_percentage_1 = 0;
+uint8_t opening_percentage_2 = 0;
 
 char word_buffer[UART_BUFFER_SIZE];
 char uart_rx_buffer[UART_BUFFER_SIZE];
@@ -160,10 +173,11 @@ uint8_t stepSequence[4] = {
 
 static uint32_t motorStartTime = 0;
 static uint32_t motorNextStepTime = 0;
-static uint8_t motorStepIndex = 0;
+static uint16_t motorStepIndex1 = 0;
+static uint8_t motorStepIndex2 = 0;
 static bool motorRunningFlag = false;
 
-void setStepper1Output(uint8_t step)
+void setStepper1Output(uint16_t step)
 {
     // For each bit in 'step', decide whether to set or reset the corresponding pin.
     // Bit 3 corresponds to IN1 (PA3)
@@ -176,7 +190,7 @@ void setStepper1Output(uint8_t step)
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, (step & 0x01) ? GPIO_PIN_SET : GPIO_PIN_RESET);
 }
 
-void setStepper2Output(uint8_t step)
+void setStepper2Output(uint16_t step)
 {
     // For each bit in 'step', decide whether to set or reset the corresponding pin.
     // Bit 3 corresponds to IN1 (PA3)
@@ -210,39 +224,41 @@ void runStepperStartNonBlocking(void)
 {
     motorStartTime = osKernelGetTickCount();
     motorNextStepTime = motorStartTime; // Start immediately
-    motorStepIndex = 0;
+    motorStepIndex1 = 0;
+    motorStepIndex2 = 0;
     motorRunningFlag = true;
 }
 
 // Call this periodically to update the stepper state.
 // This function sends a step every 5 ms.
-void runStepperUpdateNonBlocking(int8_t direction)
+void runStepUpdate(int16_t direction)
 {
     if (!motorRunningFlag)
         return;
 
+    if (direction > 0)
+    {
+        motorStepIndex1 = motorStepIndex1 + 1;
+    }
+    else if (direction < 0)
+    {
+        // If at 0, wrap around to last step (3); otherwise, decrement.
+        motorStepIndex1 = motorStepIndex1 - 1;
+    }
+
+    PrintLn("%d", motorStepIndex1);
+    // Schedule the next step. Adjust the delay (here 1 ms) as needed.
     uint32_t currentTick = osKernelGetTickCount();
     // Check if it's time for the next step; adjust delay as needed.
     if (currentTick >= motorNextStepTime)
     {
         // Output the current step.
-        setStepper1Output(stepSequence[motorStepIndex]);
-        setStepper2Output(stepSequence[motorStepIndex]);
+        setStepper1Output(stepSequence[motorStepIndex1 % 4]);
+        // setStepper2Output(stepSequence[motorStepIndex2]);
 
         // Update step index based on direction.
-        if (direction > 0)
-        {
-            motorStepIndex = (motorStepIndex + 1) % 4;
-        }
-        else if (direction < 0)
-        {
-            // If at 0, wrap around to last step (3); otherwise, decrement.
-            motorStepIndex = (motorStepIndex == 0) ? 3 : motorStepIndex - 1;
-        }
-
-        // Schedule the next step. Adjust the delay (here 1 ms) as needed.
-        motorNextStepTime = currentTick + 1;
     }
+    motorNextStepTime = currentTick + 1;
 }
 
 // Call this to stop the motor and reset the non-blocking state.
@@ -336,6 +352,12 @@ int main(void)
 
     /* Init scheduler */
     osKernelInitialize();
+    /* Create the mutex(es) */
+    /* creation of openingPercentage1 */
+    openingPercentage1Handle = osMutexNew(&openingPercentage1_attributes);
+
+    /* creation of openingPercentage2 */
+    openingPercentage2Handle = osMutexNew(&openingPercentage2_attributes);
 
     /* USER CODE BEGIN RTOS_MUTEX */
     /* add mutexes, ... */
@@ -589,7 +611,7 @@ static void MX_I2C1_Init(void)
 
     /* USER CODE END I2C1_Init 1 */
     hi2c1.Instance = I2C1;
-    hi2c1.Init.Timing = 0x307075B1;
+    hi2c1.Init.Timing = 0x30A175AB;
     hi2c1.Init.OwnAddress1 = 0;
     hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
     hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
@@ -636,7 +658,7 @@ static void MX_I2C2_Init(void)
 
     /* USER CODE END I2C2_Init 1 */
     hi2c2.Instance = I2C2;
-    hi2c2.Init.Timing = 0x307075B1;
+    hi2c2.Init.Timing = 0x30A175AB;
     hi2c2.Init.OwnAddress1 = 0;
     hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
     hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
@@ -1068,6 +1090,8 @@ void StartLightSensorTask(void *argument)
     /* USER CODE BEGIN 5 */
     // PrintLn("Sensor Task started");
     uint16_t lightPercentage;
+    uint8_t counter = 0;
+    uint8_t next_opening_percentage;
     /* Infinite loop */
     for (;;)
     {
@@ -1079,17 +1103,51 @@ void StartLightSensorTask(void *argument)
             lightPercentage = currentReading * 100 / 4096;
         };
 
+        PrintLn("light %d", lightPercentage);
         HAL_ADC_Stop(&hadc1);
         // Read The ADC Conversion Result & Map It To PWM DutyCycle
         // PrintLn("Percentage %d", lightPercentage);
-        osStatus_t status = osMessageQueuePut(lightQueueHandle, &lightPercentage, 0, 10);
-        if (status != osOK)
+        // osStatus_t status = osMessageQueuePut(lightQueueHandle, &lightPercentage, 0, 10);
+
+        if (lightPercentage > 90)
         {
-            // PrintLn("Sensor: Queue full, value %d not sent", lightPercentage);
+            if (next_opening_percentage == 50)
+                counter++;
+            else
+            {
+                next_opening_percentage = 50;
+                counter = 1;
+            }
+        }
+        else if (lightPercentage > 35)
+        {
+            if (next_opening_percentage == 100)
+                counter++;
+            else
+            {
+                next_opening_percentage = 100;
+                counter = 1;
+            }
         }
         else
         {
-            PrintLn("Sensor: Value %d sent to queue", lightPercentage);
+            if (next_opening_percentage == 0)
+                counter++;
+            else
+            {
+                next_opening_percentage = 0;
+                counter = 1;
+            }
+        }
+        PrintLn("next percentage %d - counter %d", next_opening_percentage, counter);
+        if (counter == 10)
+        {
+            if (osMutexAcquire(openingPercentage1Handle, 1) == osOK)
+            {
+                opening_percentage_1 = next_opening_percentage;
+                opening_percentage_2 = next_opening_percentage;
+                osMutexRelease(openingPercentage1Handle);
+            }
         }
         HAL_Delay(500);
     }
@@ -1107,35 +1165,28 @@ void StartMotorTask(void *argument)
 {
     /* USER CODE BEGIN StartMotorTask */
     // PrintLn("Motor Task started");
-    uint16_t lightPercentage = 0;
     bool motorRunning = false;
+    runStepperStartNonBlocking();
 
     for (;;)
     {
         // Attempt to receive a sensor value from the queue (with a 10 ms timeout)
-        osStatus_t status = osMessageQueueGet(lightQueueHandle, &lightPercentage, NULL, 10);
-        if (status == osOK)
+        if (osMutexAcquire(openingPercentage1Handle, 10) == osOK)
         {
             // PrintLn("Motor: Received light percentage: %d%%", lightPercentage);
-
-            if (lightPercentage > 30)
+            uint16_t objective_steps = (opening_percentage_1 * STEPS_PER_TURN) / 100;
+            int16_t difference_steps = objective_steps - motorStepIndex1;
+            PrintLn("calculations %d - %d", motorStepIndex1, objective_steps);
+            PrintLn("%d", difference_steps);
+            if (difference_steps != 0)
             {
-                if (!motorRunning)
+                while (motorStepIndex1 != objective_steps)
                 {
-                    runStepperStartNonBlocking();
-                    motorRunning = true;
-                    // PrintLn("Motor: Light > 30, motor started");
+                    runStepUpdate(difference_steps);
+                    osDelay(10);
                 }
             }
-            else // lightPercentage <= 50
-            {
-                if (motorRunning)
-                {
-                    runStepperStopNonBlocking();
-                    motorRunning = false;
-                    // PrintLn("Motor: Light <= 50, motor stopped");
-                }
-            }
+            osMutexRelease(openingPercentage1Handle);
         }
         else
         {
@@ -1144,19 +1195,8 @@ void StartMotorTask(void *argument)
         }
 
         // If the motor is running, update the motor steps (non-blocking update)
-        if (motorRunning)
-        {
-            if (lightPercentage > 90)
-            {
-                runStepperUpdateNonBlocking(1);
-            }
-            else if (lightPercentage > 35)
-            {
-                runStepperUpdateNonBlocking(-1);
-            }
-        }
 
-        osDelay(5); // A small delay to allow other tasks to run and to pace the updates
+        osDelay(20); // A small delay to allow other tasks to run and to pace the updates
     }
     /* USER CODE END StartMotorTask */
 }

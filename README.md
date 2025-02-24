@@ -17,6 +17,7 @@ At any time, the system may receive an instruction from the outer world indicate
 
 Telling which shutter is affected, and the opening status (in percentage of the opening course). The automatic mode is disabled.
 
+
 ### Automatic mode
 
 1. If the light sensor provides an intensity between 35% and 90% of its maximum value, the shutters will open completely.
@@ -40,8 +41,7 @@ Light: 0 < x < 35
 Shutter position: 0
 ```
 
-4. While the light sensor keeps its values between one of the 3 ranges described above, the shutters won’t be changed, unless the change has been stable during the **last 5 seconds** (as to avoid oscillations in light values close to the thresholds).
-
+4. While the light sensor keeps its values between one of the 3 ranges described above, the shutters won't be changed, unless the change has been stable during the **last 5 seconds** (as to avoid oscillations in light values close to the thresholds).
 
 ### Holidays mode
 
@@ -85,7 +85,21 @@ Where a certain cyclic sequence of opening and closing of the shutters will be d
   - *0.96in OLED*: for demonstration purposes.
 
 ---
+
 **WIP**
+
+### messages
+
+```plaintext
+# Modo Manual
+MODE_MANUAL 1 80
+
+# Modo Automático
+MODE_AUTO
+
+# Modo
+MODE_VACATION
+```
 
 ### Tasks
 
@@ -104,3 +118,8 @@ Where a certain cyclic sequence of opening and closing of the shutters will be d
 - Light sensor reading/variable (`0-100`)
 - Op Mode variable (`MANUAL_MODE`, `AUTO_MODE`, `VACATION_MODE`)
 - Opening percentage (`0-100`)
+
+### Global Variables
+
+- bool mode_auto
+- 
