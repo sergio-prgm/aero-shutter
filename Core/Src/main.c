@@ -42,7 +42,7 @@
 #define STEPS_PER_TURN 2048
 #define SHUTTER_TURNS 1
 
-#define DELAY_PASO 2 // Ajusta para cambiar la velocidad
+#define DELAY_PASO 2
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -129,14 +129,9 @@ enum OperationMode operationMode = MODE_AUTO;
 char word_buffer[UART_BUFFER_SIZE];
 char uart_rx_buffer[UART_BUFFER_SIZE];
 
-// Estado global del modo vacaciones
-volatile int modoVacacionesActivo = 0;
+const int openingLevels[4] = {0, 30, 60, 100};
 
-// Definimos los niveles de apertura (0%, 30%, 60%, 100%)
-const int nivelesApertura[4] = {0, 30, 60, 100};
-
-// Variable para almacenar la secuencia actual
-int secuenciaVacaciones[4];
+int vacationSequence[4];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -176,11 +171,8 @@ void PrintLn(const char *format, ...)
     char buffer[DEBUG_BUFFER_SIZE];
     va_list args;
 
-    // Initialize the variable argument list
     va_start(args, format);
-    // Format the string into our buffer
     vsnprintf(buffer, DEBUG_BUFFER_SIZE - 3, format, args);
-    // Clean up the variable argument list
     va_end(args);
 
     strcat(buffer, "\r\n");
@@ -189,14 +181,10 @@ void PrintLn(const char *format, ...)
 }
 
 uint8_t stepSequence[4] = {
-    0b1000, // Step 1: IN1
-    // 0b1100, // Step 2: IN1 + IN2
-    0b0100, // Step 3: IN2
-    // 0b0110, // Step 4: IN2 + IN3
-    0b0010, // Step 5: IN3
-    // 0b0011, // Step 6: IN3 + IN4
-    0b0001, // Step 7: IN4
-    // 0b1001  // Step 8: IN4 + IN1
+    0b1000,
+    0b0100,
+    0b0010,
+    0b0001,
 };
 
 static uint32_t motorStartTime = 0;
@@ -207,58 +195,29 @@ static bool motorRunningFlag = false;
 
 void setStepper1Output(uint16_t step)
 {
-    // For each bit in 'step', decide whether to set or reset the corresponding pin.
-    // Bit 3 corresponds to IN1 (PA3)
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, (step & 0x08) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-    // Bit 2 corresponds to IN2 (PB4)
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, (step & 0x04) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-    // Bit 1 corresponds to IN3 (PB1)
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, (step & 0x02) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-    // Bit 0 corresponds to IN4 (PA4)
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, (step & 0x01) ? GPIO_PIN_SET : GPIO_PIN_RESET);
 }
 
 void setStepper2Output(uint16_t step)
 {
-    // For each bit in 'step', decide whether to set or reset the corresponding pin.
-    // Bit 3 corresponds to IN1 (PA3)
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, (step & 0x08) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-    // Bit 2 corresponds to IN2 (PB4)
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, (step & 0x04) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-    // Bit 1 corresponds to IN3 (PB1)
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, (step & 0x02) ? GPIO_PIN_SET : GPIO_PIN_RESET);
-    // Bit 0 corresponds to IN4 (PA4)
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, (step & 0x01) ? GPIO_PIN_SET : GPIO_PIN_RESET);
 }
 
-void disableStepper1(void)
-{
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);
-}
-
-void disableStepper2(void)
-{
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_RESET);
-}
-
-// Call this to initialize and start the stepper non-blockingly.
 void runStepperStartNonBlocking(void)
 {
     motorStartTime = osKernelGetTickCount();
-    motorNextStepTime = motorStartTime; // Start immediately
+    motorNextStepTime = motorStartTime;
     motorStepIndex1 = 0;
     motorStepIndex2 = 0;
     motorRunningFlag = true;
 }
 
-// Call this periodically to update the stepper state.
-// This function sends a step every 5 ms.
 void runStepUpdate1(int16_t direction)
 {
     if (!motorRunningFlag)
@@ -270,21 +229,13 @@ void runStepUpdate1(int16_t direction)
     }
     else if (direction < 0)
     {
-        // If at 0, wrap around to last step (3); otherwise, decrement.
         motorStepIndex1 = motorStepIndex1 - 1;
     }
 
-    PrintLn("%d", motorStepIndex1);
-    // Schedule the next step. Adjust the delay (here 1 ms) as needed.
     uint32_t currentTick = osKernelGetTickCount();
-    // Check if it's time for the next step; adjust delay as needed.
     if (currentTick >= motorNextStepTime)
     {
-        // Output the current step.
         setStepper1Output(stepSequence[motorStepIndex1 % 4]);
-        // setStepper2Output(stepSequence[motorStepIndex2]);
-
-        // Update step index based on direction.
     }
     motorNextStepTime = currentTick + 1;
 }
@@ -299,21 +250,12 @@ void runStepUpdate2(int16_t direction)
     else if (direction < 0)
         motorStepIndex2 = motorStepIndex2 - 1;
 
-    PrintLn("%d", motorStepIndex2);
     uint32_t currentTick = osKernelGetTickCount();
     if (currentTick >= motorNextStepTime)
     {
         setStepper2Output(stepSequence[motorStepIndex2 % 4]);
     }
     motorNextStepTime = currentTick + 1;
-}
-
-// Call this to stop the motor and reset the non-blocking state.
-void runStepperStopNonBlocking(void)
-{
-    disableStepper1();
-    disableStepper2();
-    motorRunningFlag = false;
 }
 
 void InitSerialConsole(void)
@@ -341,7 +283,7 @@ void GenerateVacationSequence()
 {
     for (int i = 0; i < 4; i++)
     {
-        secuenciaVacaciones[i] = nivelesApertura[rand() % 4]; // Elige un nivel aleatorio
+        vacationSequence[i] = openingLevels[rand() % 4];
     }
 }
 /* USER CODE END 0 */
@@ -1146,7 +1088,6 @@ static void MX_GPIO_Init(void)
 void StartLightSensorTask(void *argument)
 {
     /* USER CODE BEGIN 5 */
-    // PrintLn("Sensor Task started");
     uint16_t lightPercentage;
     uint8_t counter = 0;
     uint8_t next_opening_percentage;
@@ -1165,11 +1106,7 @@ void StartLightSensorTask(void *argument)
                     lightPercentage = currentReading * 100 / 4096;
                 };
 
-                // PrintLn("light %d", lightPercentage);
                 HAL_ADC_Stop(&hadc1);
-                // Read The ADC Conversion Result & Map It To PWM DutyCycle
-                // PrintLn("Percentage %d", lightPercentage);
-                // osStatus_t status = osMessageQueuePut(lightQueueHandle, &lightPercentage, 0, 10);
 
                 if (lightPercentage > 90)
                 {
@@ -1201,11 +1138,11 @@ void StartLightSensorTask(void *argument)
                         counter = 1;
                     }
                 }
-                // PrintLn("next percentage %d - counter %d", next_opening_percentage, counter);
                 if (counter == 10)
                 {
                     if (osMutexAcquire(openingPercentageHandle, 1) == osOK)
                     {
+                        PrintLn("modify opening percentage light task");
                         opening_percentage_1 = next_opening_percentage;
                         opening_percentage_2 = next_opening_percentage;
                         osMutexRelease(openingPercentageHandle);
@@ -1229,38 +1166,49 @@ void StartLightSensorTask(void *argument)
 void StartMotorTask(void *argument)
 {
     /* USER CODE BEGIN StartMotorTask */
-    // PrintLn("Motor Task started");
     bool motorRunning = false;
     runStepperStartNonBlocking();
 
     for (;;)
     {
-        // Attempt to receive a sensor value from the queue (with a 10 ms timeout)
-        if (osMutexAcquire(openingPercentageHandle, 10) == osOK)
+        if (osMutexAcquire(operationModeHandle, 20) == osOK)
         {
-            // PrintLn("Opeartion Mode %d", operationMode);
-            // PrintLn("Motor: Received light percentage: %d%%", lightPercentage);
-            uint16_t objective_steps = (opening_percentage_1 * STEPS_PER_TURN) / 100;
-            int16_t difference_steps = objective_steps - motorStepIndex1;
-            if (difference_steps != 0)
+            if (operationMode != MODE_VACA)
             {
-                while (motorStepIndex1 != objective_steps)
+                osMutexRelease(operationModeHandle);
+                if (osMutexAcquire(openingPercentageHandle, 10) == osOK)
                 {
-                    runStepUpdate1(difference_steps);
-                    osDelay(10);
+                    uint16_t objective_steps = (opening_percentage_1 * STEPS_PER_TURN) / 100;
+                    osMutexRelease(openingPercentageHandle);
+                    int16_t difference_steps = objective_steps - motorStepIndex1;
+                    if (difference_steps != 0)
+                    {
+                        while (motorStepIndex1 != objective_steps)
+                        {
+                            if (osMutexAcquire(operationModeHandle, 5) == osOK)
+                            {
+                                if (operationMode == MODE_VACA)
+                                {
+                                    osMutexRelease(operationModeHandle);
+                                    break;
+                                }
+                                osMutexRelease(operationModeHandle);
+                            }
+                            runStepUpdate1(difference_steps);
+                            osDelay(10);
+                        }
+                    }
+                }
+                else
+                {
+                    PrintLn("Motor: No new sensor value received");
                 }
             }
-            osMutexRelease(openingPercentageHandle);
-        }
-        else
-        {
-            // Optionally log no message received
-            // PrintLn("Motor: No new sensor value received");
+            else
+                osMutexRelease(operationModeHandle);
         }
 
-        // If the motor is running, update the motor steps (non-blocking update)
-
-        osDelay(20); // A small delay to allow other tasks to run and to pace the updates
+        osDelay(50);
     }
     /* USER CODE END StartMotorTask */
 }
@@ -1286,11 +1234,11 @@ void StartSerialReadTask(void *argument)
         if (osMessageQueueGet(serialQueueHandle, &received, NULL, 5) == osOK)
         {
             PrintLn("Received: %c", received);
-            if (received == '\n' || received == ';') // Delimitador detectado
+            if (received == '\n' || received == ';')
             {
                 if (osMutexAcquire(operationModeHandle, 5) == osOK)
                 {
-                    word_buffer[word_index] = '\0'; // Termina la palabra
+                    word_buffer[word_index] = '\0';
                     word_index = 0;
                     PrintLn("Word buffer %s", word_buffer);
 
@@ -1299,7 +1247,7 @@ void StartSerialReadTask(void *argument)
                         operationMode = MODE_MANUAL;
                         PrintLn("mode manual");
                         PrintLn("%s", word_buffer);
-                        int shutter = word_buffer[1] - '0'; // Extrae 1 o 2
+                        int shutter = word_buffer[1] - '0';
                         if (shutter == 1)
                             opening_percentage_1 = atoi(&word_buffer[2]);
                         if (shutter == 2)
@@ -1309,12 +1257,12 @@ void StartSerialReadTask(void *argument)
                         operationMode = MODE_AUTO;
                     if (word_buffer[0] == 'V')
                         operationMode = MODE_VACA;
+                    osMutexRelease(operationModeHandle);
                 }
-                osMutexRelease(operationModeHandle);
             }
             else
             {
-                if (word_index < UART_BUFFER_SIZE - 1) // Evita desbordamiento
+                if (word_index < UART_BUFFER_SIZE - 1)
                 {
                     word_buffer[word_index++] = received;
                 }
@@ -1342,28 +1290,47 @@ void StartVacationModeTask(void *argument)
         {
             if (operationMode == MODE_VACA)
             {
-                PrintLn("Modo vaca");
                 osMutexRelease(operationModeHandle);
+                PrintLn("Modo vaca");
                 GenerateVacationSequence();
-                PrintLn("First step: %d, Second step: %d, Third step: %d, Fourth step: %d", secuenciaVacaciones[0], secuenciaVacaciones[1], secuenciaVacaciones[2], secuenciaVacaciones[3]);
+                PrintLn("First step: %d, Second step: %d, Third step: %d, Fourth step: %d", vacationSequence[0], vacationSequence[1], vacationSequence[2], vacationSequence[3]);
 
                 for (int i = 0; i < 4; i++)
                 {
-                    // if (operationMode == MODE_VACA)
-                    //     break; // Si el modo se desactiva, salir
 
-                    osMutexAcquire(openingPercentageHandle, 5);
-                    opening_percentage_1 = secuenciaVacaciones[i];
-                    osMutexRelease(openingPercentageHandle);
+                    if (osMutexAcquire(openingPercentageHandle, 5) == osOK)
+                    {
+                        opening_percentage_1 = vacationSequence[i];
 
-                    // Espera entre 2 y 3 segundos antes del siguiente cambio
-                    osDelay(2000 + (rand() % 1001));
+                        uint16_t objective_steps = (opening_percentage_1 * STEPS_PER_TURN) / 100;
+                        osMutexRelease(openingPercentageHandle);
+                        int16_t difference_steps = objective_steps - motorStepIndex1;
+                        if (difference_steps != 0)
+                        {
+                            while (motorStepIndex1 != objective_steps)
+                            {
+                                if (osMutexAcquire(operationModeHandle, 5) == osOK)
+                                {
+                                    if (operationMode != MODE_VACA)
+                                    {
+                                        osMutexRelease(operationModeHandle);
+                                        break;
+                                    }
+                                    osMutexRelease(operationModeHandle);
+                                }
+
+                                runStepUpdate1(difference_steps);
+                                osDelay(10);
+                            }
+                        }
+                        osDelay(3000);
+                    }
                 }
             }
             else
                 osMutexRelease(operationModeHandle);
         }
-        osDelay(20);
+        osDelay(50);
     }
     /* USER CODE END StartVacationModeTask */
 }

@@ -92,16 +92,14 @@ Where a certain cyclic sequence of opening and closing of the shutters will be d
 
 ```plaintext
 # Modo Manual
-MODE_MANUAL 1 80
-M;
-1;
-10;
+MODE_MANUAL 1 20
+M120;
 
 # Modo Automático
-MODE_AUTO
+A;
 
 # Modo
-MODE_VACATION
+V;
 ```
 
 ### Tasks
