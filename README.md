@@ -93,6 +93,9 @@ Where a certain cyclic sequence of opening and closing of the shutters will be d
 ```plaintext
 # Modo Manual
 MODE_MANUAL 1 80
+M;
+1;
+10;
 
 # Modo Automático
 MODE_AUTO
@@ -115,9 +118,8 @@ MODE_VACATION
 
 ### Mutexes
 
-- Light sensor reading/variable (`0-100`)
+- [x] Opening percentage (`0-100`)
 - Op Mode variable (`MANUAL_MODE`, `AUTO_MODE`, `VACATION_MODE`)
-- Opening percentage (`0-100`)
 
 ### Global Variables
 

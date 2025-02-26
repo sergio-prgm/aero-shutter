@@ -93,20 +93,29 @@ const osMessageQueueAttr_t lightQueue_attributes = {
 osMessageQueueId_t serialQueueHandle;
 const osMessageQueueAttr_t serialQueue_attributes = {
     .name = "serialQueue"};
-/* Definitions for openingPercentage1 */
-osMutexId_t openingPercentage1Handle;
-const osMutexAttr_t openingPercentage1_attributes = {
-    .name = "openingPercentage1"};
-/* Definitions for openingPercentage2 */
-osMutexId_t openingPercentage2Handle;
-const osMutexAttr_t openingPercentage2_attributes = {
-    .name = "openingPercentage2"};
+/* Definitions for openingPercentage */
+osMutexId_t openingPercentageHandle;
+const osMutexAttr_t openingPercentage_attributes = {
+    .name = "openingPercentage"};
+/* Definitions for operationMode */
+osMutexId_t operationModeHandle;
+const osMutexAttr_t operationMode_attributes = {
+    .name = "operationMode"};
 /* USER CODE BEGIN PV */
 char rxByte;
 volatile write_index = 0;
 uint8_t word_index;
 uint8_t opening_percentage_1 = 0;
 uint8_t opening_percentage_2 = 0;
+
+enum OperationMode
+{
+    MODE_AUTO,
+    MODE_MANUAL,
+    MODE_VACA
+};
+
+enum OperationMode operationMode = MODE_AUTO;
 
 char word_buffer[UART_BUFFER_SIZE];
 char uart_rx_buffer[UART_BUFFER_SIZE];
@@ -231,7 +240,7 @@ void runStepperStartNonBlocking(void)
 
 // Call this periodically to update the stepper state.
 // This function sends a step every 5 ms.
-void runStepUpdate(int16_t direction)
+void runStepUpdate1(int16_t direction)
 {
     if (!motorRunningFlag)
         return;
@@ -257,6 +266,25 @@ void runStepUpdate(int16_t direction)
         // setStepper2Output(stepSequence[motorStepIndex2]);
 
         // Update step index based on direction.
+    }
+    motorNextStepTime = currentTick + 1;
+}
+
+void runStepUpdate2(int16_t direction)
+{
+    if (!motorRunningFlag)
+        return;
+
+    if (direction > 0)
+        motorStepIndex2 = motorStepIndex2 + 1;
+    else if (direction < 0)
+        motorStepIndex2 = motorStepIndex2 - 1;
+
+    PrintLn("%d", motorStepIndex2);
+    uint32_t currentTick = osKernelGetTickCount();
+    if (currentTick >= motorNextStepTime)
+    {
+        setStepper2Output(stepSequence[motorStepIndex2 % 4]);
     }
     motorNextStepTime = currentTick + 1;
 }
@@ -353,11 +381,11 @@ int main(void)
     /* Init scheduler */
     osKernelInitialize();
     /* Create the mutex(es) */
-    /* creation of openingPercentage1 */
-    openingPercentage1Handle = osMutexNew(&openingPercentage1_attributes);
+    /* creation of openingPercentage */
+    openingPercentageHandle = osMutexNew(&openingPercentage_attributes);
 
-    /* creation of openingPercentage2 */
-    openingPercentage2Handle = osMutexNew(&openingPercentage2_attributes);
+    /* creation of operationMode */
+    operationModeHandle = osMutexNew(&operationMode_attributes);
 
     /* USER CODE BEGIN RTOS_MUTEX */
     /* add mutexes, ... */
@@ -1095,60 +1123,67 @@ void StartLightSensorTask(void *argument)
     /* Infinite loop */
     for (;;)
     {
-        HAL_ADC_Start(&hadc1);
-        if (HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY) == HAL_OK)
+        if (osMutexAcquire(operationModeHandle, 10) == osOK)
         {
-            uint16_t currentReading = HAL_ADC_GetValue(&hadc1);
+            if (operationMode == MODE_AUTO)
+            {
+                HAL_ADC_Start(&hadc1);
+                if (HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY) == HAL_OK)
+                {
+                    uint16_t currentReading = HAL_ADC_GetValue(&hadc1);
 
-            lightPercentage = currentReading * 100 / 4096;
-        };
+                    lightPercentage = currentReading * 100 / 4096;
+                };
 
-        PrintLn("light %d", lightPercentage);
-        HAL_ADC_Stop(&hadc1);
-        // Read The ADC Conversion Result & Map It To PWM DutyCycle
-        // PrintLn("Percentage %d", lightPercentage);
-        // osStatus_t status = osMessageQueuePut(lightQueueHandle, &lightPercentage, 0, 10);
+                // PrintLn("light %d", lightPercentage);
+                HAL_ADC_Stop(&hadc1);
+                // Read The ADC Conversion Result & Map It To PWM DutyCycle
+                // PrintLn("Percentage %d", lightPercentage);
+                // osStatus_t status = osMessageQueuePut(lightQueueHandle, &lightPercentage, 0, 10);
 
-        if (lightPercentage > 90)
-        {
-            if (next_opening_percentage == 50)
-                counter++;
-            else
-            {
-                next_opening_percentage = 50;
-                counter = 1;
+                if (lightPercentage > 90)
+                {
+                    if (next_opening_percentage == 50)
+                        counter++;
+                    else
+                    {
+                        next_opening_percentage = 50;
+                        counter = 1;
+                    }
+                }
+                else if (lightPercentage > 35)
+                {
+                    if (next_opening_percentage == 100)
+                        counter++;
+                    else
+                    {
+                        next_opening_percentage = 100;
+                        counter = 1;
+                    }
+                }
+                else
+                {
+                    if (next_opening_percentage == 0)
+                        counter++;
+                    else
+                    {
+                        next_opening_percentage = 0;
+                        counter = 1;
+                    }
+                }
+                // PrintLn("next percentage %d - counter %d", next_opening_percentage, counter);
+                if (counter == 10)
+                {
+                    if (osMutexAcquire(openingPercentageHandle, 1) == osOK)
+                    {
+                        opening_percentage_1 = next_opening_percentage;
+                        opening_percentage_2 = next_opening_percentage;
+                        osMutexRelease(openingPercentageHandle);
+                    }
+                }
             }
         }
-        else if (lightPercentage > 35)
-        {
-            if (next_opening_percentage == 100)
-                counter++;
-            else
-            {
-                next_opening_percentage = 100;
-                counter = 1;
-            }
-        }
-        else
-        {
-            if (next_opening_percentage == 0)
-                counter++;
-            else
-            {
-                next_opening_percentage = 0;
-                counter = 1;
-            }
-        }
-        PrintLn("next percentage %d - counter %d", next_opening_percentage, counter);
-        if (counter == 10)
-        {
-            if (osMutexAcquire(openingPercentage1Handle, 1) == osOK)
-            {
-                opening_percentage_1 = next_opening_percentage;
-                opening_percentage_2 = next_opening_percentage;
-                osMutexRelease(openingPercentage1Handle);
-            }
-        }
+        osMutexRelease(operationModeHandle);
         HAL_Delay(500);
     }
     /* USER CODE END 5 */
@@ -1171,22 +1206,21 @@ void StartMotorTask(void *argument)
     for (;;)
     {
         // Attempt to receive a sensor value from the queue (with a 10 ms timeout)
-        if (osMutexAcquire(openingPercentage1Handle, 10) == osOK)
+        if (osMutexAcquire(openingPercentageHandle, 10) == osOK)
         {
+            // PrintLn("Opeartion Mode %d", operationMode);
             // PrintLn("Motor: Received light percentage: %d%%", lightPercentage);
             uint16_t objective_steps = (opening_percentage_1 * STEPS_PER_TURN) / 100;
             int16_t difference_steps = objective_steps - motorStepIndex1;
-            PrintLn("calculations %d - %d", motorStepIndex1, objective_steps);
-            PrintLn("%d", difference_steps);
             if (difference_steps != 0)
             {
                 while (motorStepIndex1 != objective_steps)
                 {
-                    runStepUpdate(difference_steps);
+                    runStepUpdate1(difference_steps);
                     osDelay(10);
                 }
             }
-            osMutexRelease(openingPercentage1Handle);
+            osMutexRelease(openingPercentageHandle);
         }
         else
         {
@@ -1215,17 +1249,37 @@ void StartSerialReadTask(void *argument)
     char received;
     char word_buffer[UART_BUFFER_SIZE];
     uint8_t word_index = 0;
+    uint8_t selected_shutter = 0;
     /* Infinite loop */
     for (;;)
     {
-        if (osMessageQueueGet(serialQueueHandle, &received, NULL, 10) == osOK)
+        if (osMessageQueueGet(serialQueueHandle, &received, NULL, 5) == osOK)
         {
             PrintLn("Received: %c", received);
             if (received == '\n' || received == ';') // Delimitador detectado
             {
-                word_buffer[word_index] = '\0'; // Termina la palabra
-                word_index = 0;
-                PrintLn("Word buffer %s", word_buffer);
+                if (osMutexAcquire(operationModeHandle, 5) == osOK)
+                {
+                    word_buffer[word_index] = '\0'; // Termina la palabra
+                    word_index = 0;
+                    PrintLn("Word buffer %s", word_buffer);
+
+                    if (word_buffer[0] == 'M' && (word_buffer[1] == '1' || word_buffer[1] == '2'))
+                    {
+                        PrintLn("mode manual");
+                        PrintLn("%s", word_buffer);
+                        int shutter = word_buffer[1] - '0'; // Extrae 1 o 2
+                        if (shutter == 1)
+                            opening_percentage_1 = atoi(&word_buffer[2]);
+                        if (shutter == 2)
+                            opening_percentage_2 = atoi(&word_buffer[2]);
+                    }
+                    if (word_buffer[0] == 'A')
+                        operationMode = MODE_AUTO;
+                    if (word_buffer[0] == 'V')
+                        operationMode = MODE_VACA;
+                }
+                osMutexRelease(operationModeHandle);
             }
             else
             {
@@ -1235,11 +1289,9 @@ void StartSerialReadTask(void *argument)
                 }
             }
         }
-        // PrintLn("%s", word_buffer);
-
-        osDelay(10);
+        osDelay(500);
+        /* USER CODE END StartSerialReadTask */
     }
-    /* USER CODE END StartSerialReadTask */
 }
 
 /**
