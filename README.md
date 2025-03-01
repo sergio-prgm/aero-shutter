@@ -122,4 +122,3 @@ V;
 ### Global Variables
 
 - bool mode_auto
-- 

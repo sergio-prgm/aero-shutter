@@ -1149,8 +1149,8 @@ void StartLightSensorTask(void *argument)
                     }
                 }
             }
+            osMutexRelease(operationModeHandle);
         }
-        osMutexRelease(operationModeHandle);
         HAL_Delay(500);
     }
     /* USER CODE END 5 */
@@ -1173,9 +1173,10 @@ void StartMotorTask(void *argument)
     {
         if (osMutexAcquire(operationModeHandle, 20) == osOK)
         {
-            if (operationMode != MODE_VACA)
+            bool isVacationMode = (operationMode == MODE_VACA);
+            osMutexRelease(operationModeHandle);
+            if (!isVacationMode)
             {
-                osMutexRelease(operationModeHandle);
                 if (osMutexAcquire(openingPercentageHandle, 10) == osOK)
                 {
                     uint16_t objective_steps = (opening_percentage_1 * STEPS_PER_TURN) / 100;
@@ -1204,8 +1205,6 @@ void StartMotorTask(void *argument)
                     PrintLn("Motor: No new sensor value received");
                 }
             }
-            else
-                osMutexRelease(operationModeHandle);
         }
 
         osDelay(50);
@@ -1288,7 +1287,10 @@ void StartVacationModeTask(void *argument)
     {
         if (osMutexAcquire(operationModeHandle, 10) == osOK)
         {
-            if (operationMode == MODE_VACA)
+            bool isVacationMode = (operationMode == MODE_VACA);
+            osMutexRelease(operationModeHandle);
+
+            if (isVacationMode)
             {
                 osMutexRelease(operationModeHandle);
                 PrintLn("Modo vaca");
@@ -1327,8 +1329,6 @@ void StartVacationModeTask(void *argument)
                     }
                 }
             }
-            else
-                osMutexRelease(operationModeHandle);
         }
         osDelay(50);
     }
