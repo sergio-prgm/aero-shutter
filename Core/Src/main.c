@@ -160,8 +160,11 @@ void StartVacationModeTask(void *argument);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+/* USER CODE BEGIN 0 */
+volatile bool inCommandInput = false;
+
 /**
- * @brief  PrintLn prints a  printf-style formatted string to the USART1 console and adds a new line.
+ * @brief  PrintLn prints a printf-style formatted string to the USART1 console and adds a new line.
  * @param  format: Format string (printf-style)
  * @param  ...: Arguments to be formatted
  * @retval None
@@ -176,8 +179,21 @@ void PrintLn(const char *format, ...)
     va_end(args);
 
     strcat(buffer, "\r\n");
-    // Transmit the formatted string via USART1
-    HAL_UART_Transmit(&huart1, (uint8_t *)buffer, strlen(buffer), HAL_MAX_DELAY);
+
+    // Check if we're in command input
+    if (inCommandInput)
+    {
+        // Save current user input
+        // Print current line + new content + restore user input line
+        HAL_UART_Transmit(&huart1, (uint8_t *)"\r\n", 2, HAL_MAX_DELAY);
+        HAL_UART_Transmit(&huart1, (uint8_t *)buffer, strlen(buffer), HAL_MAX_DELAY);
+        HAL_UART_Transmit(&huart1, (uint8_t *)"> ", 2, HAL_MAX_DELAY);
+    }
+    else
+    {
+        // Just print normally
+        HAL_UART_Transmit(&huart1, (uint8_t *)buffer, strlen(buffer), HAL_MAX_DELAY);
+    }
 }
 
 uint8_t stepSequence[4] = {
@@ -1280,52 +1296,222 @@ void StartMotorTask(void *argument)
 void StartSerialReadTask(void *argument)
 {
     /* USER CODE BEGIN StartSerialReadTask */
-    PrintLn("Start serial read task");
-    char received;
-    char word_buffer[UART_BUFFER_SIZE];
-    uint8_t word_index = 0;
-    uint8_t selected_shutter = 0;
+    PrintLn("Serial interface ready - Commands: A (Auto), V (Vacation), Mnp (Manual, n=shutter, p=percentage)");
+    PrintLn("Type 'help' for more information");
+
+    char receivedChar;
+    char cmdBuffer[UART_BUFFER_SIZE];
+    uint8_t bufferIndex = 0;
+    bool bufferOverflow = false;
+
+    // Ensure UART receive interrupt is active
+    HAL_UART_Receive_IT(&huart1, (uint8_t *)&rxByte, 1);
+
+    HAL_UART_Transmit(&huart1, (uint8_t *)"> ", 2, HAL_MAX_DELAY);
+    inCommandInput = true;
     /* Infinite loop */
     for (;;)
     {
-        if (osMessageQueueGet(serialQueueHandle, &received, NULL, 5) == osOK)
+        // Wait for characters from the queue with timeout
+        if (osMessageQueueGet(serialQueueHandle, &receivedChar, NULL, 100) == osOK)
         {
-            PrintLn("Received: %c", received);
-            if (received == '\n' || received == ';')
+            // Handle backspace/delete if connected to a terminal
+            if (receivedChar == '\b' || receivedChar == 127)
             {
-                if (osMutexAcquire(operationModeHandle, 5) == osOK)
+                if (bufferIndex > 0)
                 {
-                    word_buffer[word_index] = '\0';
-                    word_index = 0;
-                    PrintLn("Word buffer %s", word_buffer);
-
-                    if (word_buffer[0] == 'M' && (word_buffer[1] == '1' || word_buffer[1] == '2'))
-                    {
-                        operationMode = MODE_MANUAL;
-                        PrintLn("mode manual");
-                        PrintLn("%s", word_buffer);
-                        int shutter = word_buffer[1] - '0';
-                        if (shutter == 1)
-                            opening_percentage_1 = atoi(&word_buffer[2]);
-                        if (shutter == 2)
-                            opening_percentage_2 = atoi(&word_buffer[2]);
-                    }
-                    if (word_buffer[0] == 'A')
-                        operationMode = MODE_AUTO;
-                    if (word_buffer[0] == 'V')
-                        operationMode = MODE_VACA;
-                    osMutexRelease(operationModeHandle);
+                    bufferIndex--;
+                    // Echo backspace (delete last character in terminal)
+                    HAL_UART_Transmit(&huart1, (uint8_t *)"\b \b", 3, HAL_MAX_DELAY);
                 }
+                continue;
+            }
+
+            // DO NOT echo the character back - it's already being echoed by the terminal
+            // This fixes the character doubling issue
+
+            // Process command on line ending
+            if (receivedChar == '\n' || receivedChar == '\r' || receivedChar == ';')
+            {
+                // Send a newline to advance to the next line
+                HAL_UART_Transmit(&huart1, (uint8_t *)"\r\n", 2, HAL_MAX_DELAY);
+
+                // We're processing a command, temporarily disable the command input flag
+                inCommandInput = false;
+
+                // Null-terminate the string
+                cmdBuffer[bufferIndex] = '\0';
+
+                // Process only if we have content and no overflow occurred
+                if (bufferIndex > 0 && !bufferOverflow)
+                {
+                    PrintLn("Processing command: %s", cmdBuffer);
+
+                    // Process the command
+                    if (osMutexAcquire(operationModeHandle, osWaitForever) == osOK)
+                    {
+                        // Command format: M<n><percentage> - Manual mode for shutter n
+                        if (cmdBuffer[0] == 'M' && bufferIndex >= 2)
+                        {
+                            int shutterNum = 0;
+                            int percentage = 0;
+                            bool validCommand = false;
+
+                            // Validate shutter number (1 or 2)
+                            if (cmdBuffer[1] == '1' || cmdBuffer[1] == '2')
+                            {
+                                shutterNum = cmdBuffer[1] - '0';
+
+                                // Parse percentage value
+                                if (bufferIndex >= 3)
+                                {
+                                    percentage = atoi(&cmdBuffer[2]);
+
+                                    // Validate percentage range
+                                    if (percentage >= 0 && percentage <= 100)
+                                    {
+                                        validCommand = true;
+                                    }
+                                    else
+                                    {
+                                        PrintLn("Error: Percentage must be between 0-100");
+                                    }
+                                }
+                                else
+                                {
+                                    PrintLn("Error: Missing percentage value");
+                                }
+                            }
+                            else
+                            {
+                                PrintLn("Error: Invalid shutter number (must be 1 or 2)");
+                            }
+
+                            if (validCommand)
+                            {
+                                // Switch to manual mode
+                                operationMode = MODE_MANUAL;
+                                PrintLn("Switched to manual mode");
+
+                                // Set the specified shutter position
+                                if (osMutexAcquire(openingPercentageHandle, osWaitForever) == osOK)
+                                {
+                                    if (shutterNum == 1)
+                                    {
+                                        opening_percentage_1 = percentage;
+                                        PrintLn("Setting shutter 1 to %d%%", percentage);
+                                    }
+                                    else if (shutterNum == 2)
+                                    {
+                                        opening_percentage_2 = percentage;
+                                        PrintLn("Setting shutter 2 to %d%%", percentage);
+                                    }
+                                    osMutexRelease(openingPercentageHandle);
+                                }
+                                else
+                                {
+                                    PrintLn("Error: Could not acquire mutex");
+                                }
+                            }
+                        }
+                        // Command: A - Automatic mode
+                        else if (cmdBuffer[0] == 'A')
+                        {
+                            // Automatic mode
+                            operationMode = MODE_AUTO;
+                            PrintLn("Switched to automatic mode");
+                        }
+                        // Command: V - Vacation mode
+                        else if (cmdBuffer[0] == 'V')
+                        {
+                            // Vacation mode
+                            operationMode = MODE_VACA;
+                            PrintLn("Switched to vacation mode");
+                        }
+                        // Query current status
+                        else if (cmdBuffer[0] == '?')
+                        {
+                            // Show current status
+                            const char *modeStr;
+                            switch (operationMode)
+                            {
+                            case MODE_AUTO:
+                                modeStr = "Automatic";
+                                break;
+                            case MODE_MANUAL:
+                                modeStr = "Manual";
+                                break;
+                            case MODE_VACA:
+                                modeStr = "Vacation";
+                                break;
+                            default:
+                                modeStr = "Unknown";
+                                break;
+                            }
+
+                            if (osMutexAcquire(openingPercentageHandle, 10) == osOK)
+                            {
+                                PrintLn("Status:");
+                                PrintLn("  Mode: %s", modeStr);
+                                PrintLn("  Shutter 1: %d%%", opening_percentage_1);
+                                PrintLn("  Shutter 2: %d%%", opening_percentage_2);
+                                osMutexRelease(openingPercentageHandle);
+                            }
+                            else
+                            {
+                                PrintLn("Status:");
+                                PrintLn("  Mode: %s", modeStr);
+                                PrintLn("  Shutter positions: [locked]");
+                            }
+                        }
+                        else if (cmdBuffer[0] == 'H' || (cmdBuffer[0] == 'h' && cmdBuffer[1] == 'e' && cmdBuffer[2] == 'l' && cmdBuffer[3] == 'p'))
+                        {
+                            // Help command
+                            PrintLn("Available commands:");
+                            PrintLn("  A       - Switch to Automatic mode");
+                            PrintLn("  V       - Switch to Vacation mode");
+                            PrintLn("  M<n><p> - Manual mode, set shutter <n> to <p>%");
+                            PrintLn("             Example: M150 - Set shutter 1 to 50%");
+                            PrintLn("  ?       - Show current status");
+                            PrintLn("  H/help  - Show this help message");
+                        }
+                        else
+                        {
+                            PrintLn("Unknown command: %s", cmdBuffer);
+                            PrintLn("Type 'help' for available commands");
+                        }
+
+                        osMutexRelease(operationModeHandle);
+                    }
+                    else
+                    {
+                        PrintLn("Error: Could not acquire mutex to process command");
+                    }
+                }
+                else if (bufferOverflow)
+                {
+                    PrintLn("Error: Command too long, discarded");
+                }
+
+                // Reset buffer for next command
+                bufferIndex = 0;
+                bufferOverflow = false;
+
+                // Print the prompt without a newline to align with user input
+                HAL_UART_Transmit(&huart1, (uint8_t *)"> ", 2, HAL_MAX_DELAY);
+                inCommandInput = true;
+            }
+            else if (bufferIndex < UART_BUFFER_SIZE - 1)
+            {
+                // Add character to buffer
+                cmdBuffer[bufferIndex++] = receivedChar;
             }
             else
             {
-                if (word_index < UART_BUFFER_SIZE - 1)
-                {
-                    word_buffer[word_index++] = received;
-                }
+                // Buffer overflow - continue collecting but mark as overflow
+                bufferOverflow = true;
             }
         }
-        osDelay(500);
     }
     /* USER CODE END StartSerialReadTask */
 }
