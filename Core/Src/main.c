@@ -236,8 +236,8 @@ void runStepUpdate1(int16_t direction)
     if (currentTick >= motorNextStepTime)
     {
         setStepper1Output(stepSequence[motorStepIndex1 % 4]);
+        motorNextStepTime = currentTick + DELAY_PASO; // Use the defined delay constant
     }
-    motorNextStepTime = currentTick + 1;
 }
 
 void runStepUpdate2(int16_t direction)
@@ -256,6 +256,69 @@ void runStepUpdate2(int16_t direction)
         setStepper2Output(stepSequence[motorStepIndex2 % 4]);
     }
     motorNextStepTime = currentTick + 1;
+}
+
+/**
+ * @brief Move a stepper motor to a specific position
+ * @param motorIndex: Which motor to move (1 or 2)
+ * @param targetPercentage: Target position in percentage (0-100)
+ * @retval true if completed, false if interrupted
+ */
+bool MoveMotorToPosition(uint8_t motorIndex, uint8_t targetPercentage, enum OperationMode sourceMode)
+{
+    uint16_t objective_steps = (targetPercentage * STEPS_PER_TURN) / 100;
+    int16_t difference_steps;
+
+    if (motorIndex == 1)
+    {
+        difference_steps = objective_steps - motorStepIndex1;
+
+        if (difference_steps == 0)
+            return true; // Already at position
+
+        PrintLn("Moving motor %d from %d steps to %d steps (diff: %d)",
+                motorIndex, motorStepIndex1, objective_steps, difference_steps);
+
+        while (motorStepIndex1 != objective_steps)
+        {
+            // Check if we should interrupt movement (mode changed)
+            bool shouldInterrupt = false;
+            if (osMutexAcquire(operationModeHandle, 5) == osOK)
+            {
+                enum OperationMode currentMode = operationMode;
+                osMutexRelease(operationModeHandle);
+
+                // Interrupt only if the current mode differs from the source mode
+                if (currentMode != sourceMode)
+                {
+                    shouldInterrupt = true;
+                    PrintLn("Movement interrupted: mode changed from %d to %d", sourceMode, currentMode);
+                }
+            }
+
+            if (shouldInterrupt)
+            {
+                return false;
+            }
+
+            // Actually move the motor
+            if (motorIndex == 1)
+                runStepUpdate1(difference_steps > 0 ? 1 : -1);
+            else
+                runStepUpdate2(difference_steps > 0 ? 1 : -1);
+
+            osDelay(10);
+        }
+
+        PrintLn("Motor %d reached target position", motorIndex);
+    }
+    else if (motorIndex == 2)
+    {
+        // Similar code for motor 2 (if implemented)
+        // ...
+    }
+
+    return true;
 }
 
 void InitSerialConsole(void)
@@ -1091,67 +1154,75 @@ void StartLightSensorTask(void *argument)
     uint16_t lightPercentage;
     uint8_t counter = 0;
     uint8_t next_opening_percentage;
+    uint8_t current_reading_percentage = 0;
+
     /* Infinite loop */
     for (;;)
     {
+        bool isAutoMode = false;
+
         if (osMutexAcquire(operationModeHandle, 10) == osOK)
         {
-            if (operationMode == MODE_AUTO)
-            {
-                HAL_ADC_Start(&hadc1);
-                if (HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY) == HAL_OK)
-                {
-                    uint16_t currentReading = HAL_ADC_GetValue(&hadc1);
-
-                    lightPercentage = currentReading * 100 / 4096;
-                };
-
-                HAL_ADC_Stop(&hadc1);
-
-                if (lightPercentage > 90)
-                {
-                    if (next_opening_percentage == 50)
-                        counter++;
-                    else
-                    {
-                        next_opening_percentage = 50;
-                        counter = 1;
-                    }
-                }
-                else if (lightPercentage > 35)
-                {
-                    if (next_opening_percentage == 100)
-                        counter++;
-                    else
-                    {
-                        next_opening_percentage = 100;
-                        counter = 1;
-                    }
-                }
-                else
-                {
-                    if (next_opening_percentage == 0)
-                        counter++;
-                    else
-                    {
-                        next_opening_percentage = 0;
-                        counter = 1;
-                    }
-                }
-                if (counter == 10)
-                {
-                    if (osMutexAcquire(openingPercentageHandle, 1) == osOK)
-                    {
-                        PrintLn("modify opening percentage light task");
-                        opening_percentage_1 = next_opening_percentage;
-                        opening_percentage_2 = next_opening_percentage;
-                        osMutexRelease(openingPercentageHandle);
-                    }
-                }
-            }
+            isAutoMode = (operationMode == MODE_AUTO);
             osMutexRelease(operationModeHandle);
         }
-        HAL_Delay(500);
+        if (isAutoMode)
+        {
+            // Read light sensor
+            HAL_ADC_Start(&hadc1);
+            if (HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY) == HAL_OK)
+            {
+                uint16_t currentReading = HAL_ADC_GetValue(&hadc1);
+                lightPercentage = currentReading * 100 / 4096;
+            }
+            HAL_ADC_Stop(&hadc1);
+
+            // Determine next opening percentage based on light level
+            uint8_t calculated_percentage;
+            if (lightPercentage > 90)
+            {
+                calculated_percentage = 50; // 50% open when very bright
+            }
+            else if (lightPercentage > 35)
+            {
+                calculated_percentage = 100; // Fully open in normal light
+            }
+            else
+            {
+                calculated_percentage = 0; // Closed when dark
+            }
+
+            // Check if reading is stable or changing
+            if (calculated_percentage == next_opening_percentage)
+            {
+                counter++;
+            }
+            else
+            {
+                next_opening_percentage = calculated_percentage;
+                counter = 1;
+            }
+
+            // Only update after stable readings for a period (10 * 500ms = 5 seconds)
+            if (counter >= 10)
+            {
+                if (osMutexAcquire(openingPercentageHandle, 10) == osOK)
+                {
+                    // Only update if value has actually changed
+                    if (opening_percentage_1 != next_opening_percentage ||
+                        opening_percentage_2 != next_opening_percentage)
+                    {
+                        PrintLn("Auto mode: Changing shutters to %d%%", next_opening_percentage);
+                        opening_percentage_1 = next_opening_percentage;
+                        opening_percentage_2 = next_opening_percentage;
+                    }
+                    osMutexRelease(openingPercentageHandle);
+                }
+                counter = 0; // Reset counter after update
+            }
+        }
+
+        osDelay(500);
     }
     /* USER CODE END 5 */
 }
@@ -1166,47 +1237,34 @@ void StartLightSensorTask(void *argument)
 void StartMotorTask(void *argument)
 {
     /* USER CODE BEGIN StartMotorTask */
-    bool motorRunning = false;
     runStepperStartNonBlocking();
 
     for (;;)
     {
+        enum OperationMode currentMode;
+
+        // Check current mode
         if (osMutexAcquire(operationModeHandle, 20) == osOK)
         {
-            bool isVacationMode = (operationMode == MODE_VACA);
+            currentMode = operationMode;
             osMutexRelease(operationModeHandle);
-            if (!isVacationMode)
+
+            // Only control motors in non-vacation mode
+            if (currentMode != MODE_VACA)
             {
+                uint8_t target_percentage = 0;
+
+                // Get target position
                 if (osMutexAcquire(openingPercentageHandle, 10) == osOK)
                 {
-                    uint16_t objective_steps = (opening_percentage_1 * STEPS_PER_TURN) / 100;
+                    target_percentage = opening_percentage_1;
                     osMutexRelease(openingPercentageHandle);
-                    int16_t difference_steps = objective_steps - motorStepIndex1;
-                    if (difference_steps != 0)
-                    {
-                        while (motorStepIndex1 != objective_steps)
-                        {
-                            if (osMutexAcquire(operationModeHandle, 5) == osOK)
-                            {
-                                if (operationMode == MODE_VACA)
-                                {
-                                    osMutexRelease(operationModeHandle);
-                                    break;
-                                }
-                                osMutexRelease(operationModeHandle);
-                            }
-                            runStepUpdate1(difference_steps);
-                            osDelay(10);
-                        }
-                    }
-                }
-                else
-                {
-                    PrintLn("Motor: No new sensor value received");
+
+                    // Move motor to target position
+                    MoveMotorToPosition(1, target_percentage, currentMode);
                 }
             }
         }
-
         osDelay(50);
     }
     /* USER CODE END StartMotorTask */
@@ -1282,52 +1340,116 @@ void StartSerialReadTask(void *argument)
 void StartVacationModeTask(void *argument)
 {
     /* USER CODE BEGIN StartVacationModeTask */
+    bool inVacationMode = false;
+    bool sequenceGenerated = false;
     /* Infinite loop */
     for (;;)
     {
+        bool wasInVacationMode = inVacationMode;
         if (osMutexAcquire(operationModeHandle, 10) == osOK)
         {
-            bool isVacationMode = (operationMode == MODE_VACA);
+            inVacationMode = (operationMode == MODE_VACA);
             osMutexRelease(operationModeHandle);
+        }
+        if (inVacationMode && !wasInVacationMode)
+        {
+            PrintLn("Vacation mode activated");
+            GenerateVacationSequence();
+            PrintLn("Sequence: %d%%, %d%%, %d%%, %d%%",
+                    vacationSequence[0], vacationSequence[1],
+                    vacationSequence[2], vacationSequence[3]);
+            sequenceGenerated = true;
+        }
 
-            if (isVacationMode)
+        if (inVacationMode && sequenceGenerated)
+        {
+            // Run through the vacation sequence
+            for (int i = 0; i < 4; i++)
             {
-                osMutexRelease(operationModeHandle);
-                PrintLn("Modo vaca");
-                GenerateVacationSequence();
-                PrintLn("First step: %d, Second step: %d, Third step: %d, Fourth step: %d", vacationSequence[0], vacationSequence[1], vacationSequence[2], vacationSequence[3]);
-
-                for (int i = 0; i < 4; i++)
+                // Check if we're still in vacation mode
+                if (osMutexAcquire(operationModeHandle, 5) == osOK)
                 {
+                    bool stillInVacationMode = (operationMode == MODE_VACA);
+                    osMutexRelease(operationModeHandle);
 
-                    if (osMutexAcquire(openingPercentageHandle, 5) == osOK)
+                    if (!stillInVacationMode)
                     {
-                        opening_percentage_1 = vacationSequence[i];
-
-                        uint16_t objective_steps = (opening_percentage_1 * STEPS_PER_TURN) / 100;
-                        osMutexRelease(openingPercentageHandle);
-                        int16_t difference_steps = objective_steps - motorStepIndex1;
-                        if (difference_steps != 0)
-                        {
-                            while (motorStepIndex1 != objective_steps)
-                            {
-                                if (osMutexAcquire(operationModeHandle, 5) == osOK)
-                                {
-                                    if (operationMode != MODE_VACA)
-                                    {
-                                        osMutexRelease(operationModeHandle);
-                                        break;
-                                    }
-                                    osMutexRelease(operationModeHandle);
-                                }
-
-                                runStepUpdate1(difference_steps);
-                                osDelay(10);
-                            }
-                        }
-                        osDelay(3000);
+                        PrintLn("Exiting vacation sequence");
+                        break;
                     }
                 }
+
+                // Set the target percentage for this step
+                if (osMutexAcquire(openingPercentageHandle, 5) == osOK)
+                {
+                    PrintLn("Vacation step %d: Setting to %d%%", i + 1, vacationSequence[i]);
+                    opening_percentage_1 = vacationSequence[i];
+                    osMutexRelease(openingPercentageHandle);
+                }
+
+                // Move motor to position and wait for completion
+                bool completed = MoveMotorToPosition(1, vacationSequence[i], MODE_VACA);
+
+                // If movement was interrupted or we're no longer in vacation mode, exit
+                if (!completed || !inVacationMode)
+                {
+                    PrintLn("Vacation sequence interrupted");
+                    break;
+                }
+
+                // Wait between sequence steps (3 seconds)
+                PrintLn("Waiting 3 seconds before next vacation step");
+                uint32_t startTime = osKernelGetTickCount();
+                while (osKernelGetTickCount() - startTime < 3000)
+                {
+                    // Check if we're still in vacation mode during wait
+                    if (osMutexAcquire(operationModeHandle, 5) == osOK)
+                    {
+                        inVacationMode = (operationMode == MODE_VACA);
+                        osMutexRelease(operationModeHandle);
+
+                        if (!inVacationMode)
+                        {
+                            PrintLn("Exiting vacation mode during wait");
+                            break;
+                        }
+                    }
+                    osDelay(100);
+                }
+
+                if (!inVacationMode)
+                    break;
+            }
+
+            // If we're still in vacation mode after completing the sequence,
+            // wait a bit before regenerating a new sequence
+            if (inVacationMode)
+            {
+                PrintLn("Vacation sequence completed, generating new sequence in 2 seconds");
+                osDelay(2000);
+
+                // Only regenerate if still in vacation mode
+                if (osMutexAcquire(operationModeHandle, 5) == osOK)
+                {
+                    inVacationMode = (operationMode == MODE_VACA);
+                    osMutexRelease(operationModeHandle);
+
+                    if (inVacationMode)
+                    {
+                        GenerateVacationSequence();
+                        PrintLn("New sequence: %d%%, %d%%, %d%%, %d%%",
+                                vacationSequence[0], vacationSequence[1],
+                                vacationSequence[2], vacationSequence[3]);
+                    }
+                    else
+                    {
+                        sequenceGenerated = false;
+                    }
+                }
+            }
+            else
+            {
+                sequenceGenerated = false;
             }
         }
         osDelay(50);
